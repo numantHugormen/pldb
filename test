@@ -1,12 +1,15 @@
+"""
+grok_file_upload.py — upload and manage files via the xAI Files API
+Requires: xai-sdk >= 1.4.0  (pip install --upgrade xai-sdk)
+Run: python grok_file_upload.py <path-to-file>
+"""
 
 import os
 import sys
-import time
-import tempfile
 
-import requests
 from dotenv import load_dotenv
 from xai_sdk import Client
+from xai_sdk.chat import user, file
 
 load_dotenv()
 
@@ -14,218 +17,74 @@ API_KEY = os.getenv("XAI_API_KEY")
 if not API_KEY:
     raise RuntimeError("XAI_API_KEY not set — check your .env file")
 
-MODEL = "grok-2-image"
-PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
-JPEG_SIGNATURE = b"\xff\xd8\xff"
-
 client = Client(api_key=API_KEY)
 
 
-def is_valid_image(filepath: str) -> bool:
-    """Check the file's magic bytes for PNG or JPEG."""
-    with open(filepath, "rb") as f:
-        header = f.read(8)
-    return header.startswith(PNG_SIGNATURE) or header.startswith(JPEG_SIGNATURE)
+def upload_file(filepath: str):
+    """Upload a file from disk and return the file object."""
+    uploaded = client.files.upload(filepath)
+    print(f"File ID:    {uploaded.id}")
+    print(f"Filename:   {uploaded.filename}")
+    print(f"Size:       {uploaded.size:,} bytes")
+    print(f"Created at: {uploaded.created_at}")
+    return uploaded
 
 
-def download(url: str, filepath: str) -> None:
-    resp = requests.get(url, timeout=30)
-    resp.raise_for_status()
-    with open(filepath, "wb") as f:
-        f.write(resp.content)
+def upload_from_bytes(content: bytes, filename: str):
+    """Upload raw bytes directly — handy for generated content in pipelines."""
+    uploaded = client.files.upload(content, filename=filename)
+    print(f"Uploaded {filename} -> {uploaded.id}")
+    return uploaded
 
 
-def test_batch_count(tmpdir: str):
-    """Test 1: batch returns exactly n images."""
-    print("=" * 60)
-    print("TEST 1: Batch returns correct count (n=3)")
-    print("=" * 60)
-    n = 3
-    responses = client.image.sample_batch(
-        model=MODEL,
-        prompt="A minimalist geometric mountain landscape at sunset",
-        n=n,
-        image_format="url",
-    )
-    count = len(responses)
-    print(f"Requested: {n}, received: {count}")
-    assert count == n, f"Expected {n} images, got {count}"
-    print("PASSED\n")
-    return responses
+def upload_with_progress(filepath: str):
+    """Upload a large file with a progress bar (pip install tqdm)."""
+    from tqdm import tqdm
+
+    total = os.path.getsize(filepath)
+    with tqdm(total=total, unit="B", unit_scale=True, desc="Uploading") as pbar:
+        uploaded = client.files.upload(filepath, on_progress=pbar.update)
+    print(f"Done: {uploaded.filename} -> {uploaded.id}")
+    return uploaded
 
 
-def test_batch_downloads(responses, tmpdir: str):
-    """Test 2: every returned URL downloads to a valid image file."""
-    print("=" * 60)
-    print("TEST 2: All batch images download and are valid")
-    print("=" * 60)
-    files = []
-    for i, resp in enumerate(responses):
-        filepath = os.path.join(tmpdir, f"batch_{i}.png")
-        download(resp.url, filepath)
-        size = os.path.getsize(filepath)
-        valid = is_valid_image(filepath)
-        print(f"  batch_{i}.png — {size:,} bytes — valid image: {valid}")
-        assert size > 0, f"Image {i} is empty"
-        assert valid, f"Image {i} is not a valid PNG/JPEG"
-        files.append(filepath)
-    print("PASSED\n")
-    return files
+def list_files(limit: int = 10):
+    """List uploaded files, newest first."""
+    response = client.files.list(limit=limit, order="desc", sort_by="created_at")
+    for f in response.files:
+        print(f"  {f.id}  {f.filename}  ({f.size:,} bytes)")
+    return response
 
 
-def test_batch_images_distinct(files):
-    """Test 3: batch images are not identical copies."""
-    print("=" * 60)
-    print("TEST 3: Batch images are distinct")
-    print("=" * 60)
-    contents = set()
-    for f in files:
-        with open(f, "rb") as fh:
-            contents.add(fh.read())
-    print(f"Files: {len(files)}, unique: {len(contents)}")
-    assert len(contents) == len(files), "Duplicate images found in batch"
-    print("PASSED\n")
+def chat_with_file(file_id: str, question: str) -> str:
+    """Attach an uploaded file to a chat and query it."""
+    chat = client.chat.create(model="grok-4")
+    chat.append(user(question, file(file_id)))
+    response = chat.sample()
+    return response.content
 
 
-def test_batch_base64(tmpdir: str):
-    """Test 4: batch works with base64 format (no download step)."""
-    print("=" * 60)
-    print("TEST 4: Batch with base64 format (n=2)")
-    print("=" * 60)
-    import base64
-
-    responses = client.image.sample_batch(
-        model=MODEL,
-        prompt="Abstract watercolor texture, blue and gold",
-        n=2,
-        image_format="base64",
-    )
-    assert len(responses) == 2, f"Expected 2, got {len(responses)}"
-    for i, resp in enumerate(responses):
-        filepath = os.path.join(tmpdir, f"b64_{i}.png")
-        with open(filepath, "wb") as f:
-            f.write(base64.b64decode(resp.image))
-        assert is_valid_image(filepath), f"base64 image {i} invalid"
-        print(f"  b64_{i}.png — {os.path.getsize(filepath):,} bytes — OK")
-    print("PASSED\n")
-
-
-def test_batch_revised_prompts(responses):
-    """Test 5: each batch image carries a revised prompt."""
-    print("=" * 60)
-    print("TEST 5: Revised prompts present")
-    print("=" * 60)
-    for i, resp in enumerate(responses):
-        prompt = getattr(resp, "prompt", None)
-        print(f"  Image {i}: {prompt[:80] if prompt else 'MISSING'}...")
-        assert prompt, f"Image {i} missing revised prompt"
-    print("PASSED\n")
-
-
-def test_batch_latency():
-    """Test 6: measure batch generation time."""
-    print("=" * 60)
-    print("TEST 6: Batch latency (n=2)")
-    print("=" * 60)
-    start = time.time()
-    client.image.sample_batch(
-        model=MODEL,
-        prompt="A single red apple on a white table",
-        n=2,
-        image_format="url",
-    )
-    elapsed = time.time() - start
-    print(f"Batch of 2 completed in {elapsed:.2f}s ({elapsed/2:.2f}s per image)")
-    print("PASSED\n")
+def delete_file(file_id: str):
+    client.files.delete(file_id)
+    print(f"Deleted {file_id}")
 
 
 if __name__ == "__main__":
-    failed = 0
-    total = 6
+    if len(sys.argv) > 1:
+        # Upload a real file from the command line
+        filepath = sys.argv[1]
+        uploaded = upload_file(filepath)
+    else:
+        # Demo: upload generated content
+        content = b"Project: SAP-to-Azure replication\nStatus: In progress\nOwner: Data Engineering"
+        uploaded = upload_from_bytes(content, "status.txt")
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        print(f"Working dir: {tmpdir}\n")
+    print("\nYour files:")
+    list_files()
 
-        # Tests 1-3, 5 share one batch call to save cost
-        try:
-            responses = test_batch_count(tmpdir)
-        except (AssertionError, Exception) as e:
-            print(f"FAILED: {e}\n")
-            failed += 4  # dependent tests can't run
-            responses = None
+    print("\nAsking Grok about the file...")
+    answer = chat_with_file(uploaded.id, "Summarize this document in one sentence.")
+    print(f"Answer: {answer}")
 
-        if responses:
-            for t, args in [
-                (test_batch_downloads, (responses, tmpdir)),
-                (test_batch_revised_prompts, (responses,)),
-            ]:
-                try:
-                    result = t(*args)
-                    if t is test_batch_downloads:
-                        try:
-                            test_batch_images_distinct(result)
-                        except AssertionError as e:
-                            print(f"FAILED: {e}\n")
-                            failed += 1
-                except Exception as e:
-                    print(f"FAILED: {type(e).__name__}: {e}\n")
-                    failed += 1
-
-        for t in [lambda: test_batch_base64(tmpdir), test_batch_latency]:
-            try:
-                t()
-            except Exception as e:
-                print(f"FAILED: {type(e).__name__}: {e}\n")
-                failed += 1
-
-    print("=" * 60)
-    print(f"Results: {total - failed}/{total} passed")
-    sys.exit(1 if failed else 0)        f.write(img_data)
-
-    print(f"Saved to {output_file}")
-    return output_file
-
-
-def generate_image_base64(prompt: str, output_file: str = "output_b64.png") -> str:
-    """Same, but using base64 format — no second HTTP request needed."""
-    response = client.image.sample(
-        model="grok-2-image",
-        prompt=prompt,
-        image_format="base64",
-    )
-
-    with open(output_file, "wb") as f:
-        f.write(base64.b64decode(response.image))
-
-    print(f"Saved to {output_file}")
-    return output_file
-
-
-def generate_batch(prompt: str, n: int = 4) -> list[str]:
-    """Generate multiple images from one prompt (up to 10)."""
-    responses = client.image.sample_batch(
-        model="grok-2-image",
-        prompt=prompt,
-        n=n,
-        image_format="url",
-    )
-
-    files = []
-    for i, resp in enumerate(responses):
-        filename = f"batch_{i}.png"
-        img_data = requests.get(resp.url).content
-        with open(filename, "wb") as f:
-            f.write(img_data)
-        files.append(filename)
-        print(f"Saved {filename}")
-
-    return files
-
-
-if __name__ == "__main__":
-    generate_image(
-        prompt="A futuristic data center with glowing blue server racks, digital art style",
-        output_file="datacenter.png",
-    )
-
-    # generate_batch("Logo concepts for a data engineering startup", n=4)
+    # Clean up (comment out to keep the file)
+    delete_file(uploaded.id)
