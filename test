@@ -1,0 +1,110 @@
+"""
+test_grok_api.py — smoke tests for the xAI Grok API
+Run: python test_grok_api.py
+"""
+
+import os
+import sys
+import time
+
+from dotenv import load_dotenv
+from xai_sdk import Client
+from xai_sdk.chat import user, system
+
+load_dotenv()
+
+API_KEY = os.getenv("XAI_API_KEY")
+if not API_KEY:
+    raise RuntimeError("XAI_API_KEY not set — check your .env file")
+
+MODEL = "grok-4"  # or "grok-3-mini" for cheaper/faster tests
+
+client = Client(api_key=API_KEY)
+
+
+def test_basic_chat():
+    """Test 1: basic connectivity and response."""
+    print("=" * 60)
+    print("TEST 1: Basic chat")
+    print("=" * 60)
+    chat = client.chat.create(model=MODEL)
+    chat.append(user("Reply with exactly: API OK"))
+    response = chat.sample()
+    print(f"Response: {response.content}")
+    assert "API OK" in response.content, "Unexpected response"
+    print("PASSED\n")
+
+
+def test_code_generation():
+    """Test 2: ask Grok to write code."""
+    print("=" * 60)
+    print("TEST 2: Code generation")
+    print("=" * 60)
+    chat = client.chat.create(model=MODEL)
+    chat.append(system("You are a Python expert. Return only code, no explanations."))
+    chat.append(user("Write a Python function that reverses a string without using [::-1]."))
+    response = chat.sample()
+    print(response.content)
+    assert "def" in response.content, "No function in response"
+    print("PASSED\n")
+
+
+def test_streaming():
+    """Test 3: streaming responses (useful for agent workflows)."""
+    print("=" * 60)
+    print("TEST 3: Streaming")
+    print("=" * 60)
+    chat = client.chat.create(model=MODEL)
+    chat.append(user("Count from 1 to 5, one number per line."))
+    print("Streamed: ", end="")
+    for response, chunk in chat.stream():
+        print(chunk.content, end="", flush=True)
+    print("\nPASSED\n")
+
+
+def test_multi_turn():
+    """Test 4: multi-turn conversation context."""
+    print("=" * 60)
+    print("TEST 4: Multi-turn context")
+    print("=" * 60)
+    chat = client.chat.create(model=MODEL)
+    chat.append(user("My favorite number is 42. Remember it."))
+    r1 = chat.sample()
+    chat.append(r1)  # append assistant response to history
+    chat.append(user("What is my favorite number? Reply with just the number."))
+    r2 = chat.sample()
+    print(f"Response: {r2.content}")
+    assert "42" in r2.content, "Context not retained"
+    print("PASSED\n")
+
+
+def test_latency():
+    """Test 5: measure round-trip latency."""
+    print("=" * 60)
+    print("TEST 5: Latency")
+    print("=" * 60)
+    chat = client.chat.create(model=MODEL)
+    chat.append(user("Reply with one word: pong"))
+    start = time.time()
+    response = chat.sample()
+    elapsed = time.time() - start
+    print(f"Response: {response.content} ({elapsed:.2f}s)")
+    print("PASSED\n")
+
+
+if __name__ == "__main__":
+    tests = [test_basic_chat, test_code_generation, test_streaming, test_multi_turn, test_latency]
+    failed = 0
+    for t in tests:
+        try:
+            t()
+        except AssertionError as e:
+            print(f"FAILED: {e}\n")
+            failed += 1
+        except Exception as e:
+            print(f"ERROR: {type(e).__name__}: {e}\n")
+            failed += 1
+
+    print("=" * 60)
+    print(f"Results: {len(tests) - failed}/{len(tests)} passed")
+    sys.exit(1 if failed else 0)
