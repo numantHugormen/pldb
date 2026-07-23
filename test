@@ -23,6 +23,13 @@ Env vars:
 
 Usage:
   python xai_usage_report.py --days 30 --out usage_by_user.csv
+# PowerShell
+$env:XAI_MANAGEMENT_KEY = "xai-mgmt-..."
+$env:XAI_TEAM_IDS = "team-id-1"
+python xai_usage_report.py --days 30
+
+
+
 """
 
 import argparse
