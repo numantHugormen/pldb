@@ -1,141 +1,201 @@
-<mxfile host="app.diagrams.net" modified="2026-07-22T00:00:00.000Z" agent="Claude" version="24.0.0" type="device">
-  <diagram id="fabric-fw" name="Fabric Firewall Egress">
-    <mxGraphModel dx="1600" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
-      <root>
-        <mxCell id="0" />
-        <mxCell id="1" parent="0" />
- 
-        <!-- Title -->
-        <mxCell id="title" value="Microsoft Fabric – Corporate Firewall Egress for Lakehouse, Data Warehouse &amp;amp; KQL Database" style="text;html=1;fontSize=20;fontStyle=1;align=center;fontColor=#0B556A;" vertex="1" parent="1">
-          <mxGeometry x="200" y="20" width="1254" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="subtitle" value="All egress is outbound HTTPS/TDS initiated from the corporate network – no inbound rules to on-prem required (gateway uses outbound-only channels)" style="text;html=1;fontSize=12;align=center;fontColor=#666666;" vertex="1" parent="1">
-          <mxGeometry x="200" y="58" width="1254" height="24" as="geometry" />
-        </mxCell>
- 
-        <!-- ================= Corporate Network ================= -->
-        <mxCell id="corpnet" value="Corporate Network (on-premises / VNet)" style="rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=14;fillColor=#F5F5F5;strokeColor=#666666;dashed=0;arcSize=4;" vertex="1" parent="1">
-          <mxGeometry x="40" y="120" width="340" height="640" as="geometry" />
-        </mxCell>
- 
-        <mxCell id="users" value="Users / Analysts&#10;Browser (Fabric portal)&#10;Power BI Desktop" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="70" y="170" width="280" height="70" as="geometry" />
-        </mxCell>
-        <mxCell id="sqltools" value="SQL Tools&#10;SSMS / ADS / sqlcmd / Python (pyodbc)&#10;→ Lakehouse SQL endpoint &amp;amp; Warehouse" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="70" y="260" width="280" height="70" as="geometry" />
-        </mxCell>
-        <mxCell id="kqltools" value="KQL Tools&#10;Kusto Explorer / azure-kusto-python&#10;→ Eventhouse / KQL Database" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="70" y="350" width="280" height="70" as="geometry" />
-        </mxCell>
-        <mxCell id="opdg" value="On-premises Data Gateway&#10;(pipelines / dataflows to on-prem sources)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="70" y="450" width="280" height="60" as="geometry" />
-        </mxCell>
-        <mxCell id="datasources" value="On-prem Data Sources&#10;(SQL Server, files, APIs)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#999999;fontSize=12;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="70" y="540" width="280" height="60" as="geometry" />
-        </mxCell>
-        <mxCell id="e-ds-gw" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#999999;dashed=1;" edge="1" parent="1" source="datasources" target="opdg">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
- 
-        <!-- ================= Firewall ================= -->
-        <mxCell id="firewall" value="Corporate&#10;Firewall / Proxy&#10;&#10;Outbound allow-list&#10;(FQDN based)&#10;&#10;TCP 443&#10;TCP 1433&#10;TCP 5671-5672&#10;TCP 9350-9354" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontStyle=1;fontSize=13;verticalAlign=middle;" vertex="1" parent="1">
-          <mxGeometry x="450" y="170" width="150" height="430" as="geometry" />
-        </mxCell>
- 
-        <!-- ================= Microsoft Cloud ================= -->
-        <mxCell id="mscloud" value="Microsoft Cloud (SaaS – public endpoints)" style="rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=14;fillColor=#FFFFFF;strokeColor=#0078D4;arcSize=3;" vertex="1" parent="1">
-          <mxGeometry x="680" y="120" width="934" height="900" as="geometry" />
-        </mxCell>
- 
-        <!-- Entra ID -->
-        <mxCell id="entra" value="Microsoft Entra ID — Authentication &amp;amp; Authorization&#10;login.microsoftonline.com · *.msftauth.net · *.msauth.net · login.live.com — TCP 443&#10;Conditional Access · MFA · Entra security groups · Service principals / Managed identities" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontSize=12;fontStyle=1;" vertex="1" parent="1">
-          <mxGeometry x="710" y="160" width="640" height="80" as="geometry" />
-        </mxCell>
- 
-        <!-- Fabric tenant container -->
-        <mxCell id="tenant" value="Microsoft Fabric Tenant (F-SKU Capacity)" style="rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=13;fillColor=#D5E8D4;strokeColor=#82B366;opacity=60;arcSize=3;" vertex="1" parent="1">
-          <mxGeometry x="710" y="270" width="640" height="620" as="geometry" />
-        </mxCell>
- 
-        <!-- Portal / API -->
-        <mxCell id="portal" value="Fabric Portal &amp;amp; APIs&#10;*.fabric.microsoft.com · *.powerbi.com&#10;api.powerbi.com · *.analysis.windows.net · *.pbidedicated.windows.net — TCP 443" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="740" y="310" width="580" height="60" as="geometry" />
-        </mxCell>
- 
-        <!-- Workspace -->
-        <mxCell id="workspace" value="Fabric Workspace" style="rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fontStyle=1;fontSize=13;fillColor=#FFFFFF;strokeColor=#82B366;arcSize=4;" vertex="1" parent="1">
-          <mxGeometry x="740" y="390" width="580" height="330" as="geometry" />
-        </mxCell>
- 
-        <mxCell id="lakehouse" value="Lakehouse&#10;&#10;Delta tables + Files&#10;&#10;SQL analytics endpoint:&#10;*.datawarehouse.&#10;fabric.microsoft.com&#10;TCP 1433" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="760" y="430" width="170" height="150" as="geometry" />
-        </mxCell>
-        <mxCell id="warehouse" value="Data Warehouse&#10;&#10;T-SQL read/write&#10;&#10;*.datawarehouse.&#10;fabric.microsoft.com&#10;*.pbidedicated.windows.net&#10;TCP 1433" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="945" y="430" width="170" height="150" as="geometry" />
-        </mxCell>
-        <mxCell id="kqldb" value="Eventhouse /&#10;KQL Database&#10;&#10;KQL queries &amp;amp; ingestion&#10;&#10;https://*.z[0-9].kusto.&#10;fabric.microsoft.com&#10;TCP 443" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="1130" y="430" width="170" height="150" as="geometry" />
-        </mxCell>
- 
-        <!-- OneLake -->
-        <mxCell id="onelake" value="OneLake (shared storage layer for all three workloads)&#10;*.onelake.dfs.fabric.microsoft.com (ADLS DFS API) · *.onelake.blob.fabric.microsoft.com (Blob API) — TCP 443" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=11;fontStyle=1;" vertex="1" parent="1">
-          <mxGeometry x="760" y="620" width="540" height="70" as="geometry" />
-        </mxCell>
-        <mxCell id="e-lh-ol" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;" edge="1" parent="1" source="lakehouse" target="onelake"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="e-wh-ol" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;" edge="1" parent="1" source="warehouse" target="onelake"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="e-kq-ol" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;" edge="1" parent="1" source="kqldb" target="onelake"><mxGeometry relative="1" as="geometry" /></mxCell>
- 
-        <!-- Gateway relay -->
-        <mxCell id="relay" value="Azure Relay / Service Bus (gateway channel)&#10;*.servicebus.windows.net — TCP 443, 5671-5672, 9350-9354 (outbound only)&#10;*.frontend.clouddatahub.net (pipelines) — TCP 443" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="740" y="810" width="580" height="60" as="geometry" />
-        </mxCell>
- 
-        <!-- ============ Security sidebar ============ -->
-        <mxCell id="seclayers" value="Fabric Workspace Security (defense in depth)&#10;&#10;1. Network — firewall FQDN allow-list (this request);&#10;    optional: Private Link / Entra Conditional Access&#10;&#10;2. Authentication — Entra ID only (no local SQL auth);&#10;    MFA + Conditional Access policies&#10;&#10;3. Workspace roles — Admin / Member /&#10;    Contributor / Viewer (assign via Entra groups)&#10;&#10;4. Item permissions — share individual Lakehouse /&#10;    Warehouse / KQL DB; ReadData / ReadAll /&#10;    Build granular flags&#10;&#10;5. Data-level — SQL GRANT/DENY, row-level &amp;amp;&#10;    column-level security (Warehouse / SQL endpoint);&#10;    KQL RLS policies; OneLake data access roles (folder&#10;    level)&#10;&#10;6. Governance — sensitivity labels (Purview),&#10;    DLP policies, tenant/capacity admin settings,&#10;    audit logs" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=10;fillColor=#F0F6FF;strokeColor=#0078D4;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="1370" y="270" width="230" height="620" as="geometry" />
-        </mxCell>
-        <mxCell id="e-sec-ws" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#0078D4;dashed=1;exitX=0;exitY=0.35;" edge="1" parent="1" source="seclayers" target="workspace">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
- 
-        <!-- ============ Flows through firewall ============ -->
-        <mxCell id="f1" value="1. Auth — TCP 443&#10;login.microsoftonline.com, *.msftauth.net" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9673A6;strokeWidth=2;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.2;entryX=0;entryY=0.5;" edge="1" parent="1" source="users" target="entra">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points"><mxPoint x="525" y="184" /><mxPoint x="525" y="200" /></Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="f2" value="2. Portal / REST APIs — TCP 443&#10;*.fabric.microsoft.com, *.powerbi.com, api.powerbi.com" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6C8EBF;strokeWidth=2;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.8;entryX=0;entryY=0.5;" edge="1" parent="1" source="users" target="portal">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points"><mxPoint x="640" y="226" /><mxPoint x="640" y="340" /></Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="f3" value="3. TDS (T-SQL) — TCP 1433&#10;*.datawarehouse.fabric.microsoft.com, *.pbidedicated.windows.net" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;strokeWidth=2;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="sqltools" target="warehouse">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points"><mxPoint x="630" y="295" /><mxPoint x="630" y="505" /></Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="f4" value="4. KQL — TCP 443&#10;https://*.z[0-9].kusto.fabric.microsoft.com" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82B366;strokeWidth=2;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.25;" edge="1" parent="1" source="kqltools" target="kqldb">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points"><mxPoint x="620" y="385" /><mxPoint x="620" y="467" /></Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="f5" value="5. OneLake / ADLS API — TCP 443&#10;*.onelake.dfs.fabric.microsoft.com, *.onelake.blob.fabric.microsoft.com" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D6B656;strokeWidth=2;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.9;entryX=0;entryY=0.5;" edge="1" parent="1" source="kqltools" target="onelake">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points"><mxPoint x="610" y="413" /><mxPoint x="610" y="655" /></Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="f6" value="6. Gateway (outbound only) — TCP 443, 5671-5672, 9350-9354&#10;*.servicebus.windows.net" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D79B00;strokeWidth=2;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="opdg" target="relay">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points"><mxPoint x="640" y="480" /><mxPoint x="640" y="840" /></Array>
-          </mxGeometry>
-        </mxCell>
- 
-        <!-- Legend -->
-        <mxCell id="legend" value="Legend:  ■ blue = client / portal (443)   ■ green = workloads / TDS (1433 &amp;amp; 443)   ■ yellow = OneLake storage (443)   ■ orange = data gateway (443 + relay ports)   ■ purple = Entra ID auth (443)   — all flows outbound from corp network, TLS encrypted" style="text;html=1;fontSize=11;align=left;fontColor=#444444;" vertex="1" parent="1">
-          <mxGeometry x="40" y="1040" width="1560" height="30" as="geometry" />
-        </mxCell>
- 
-      </root>
-    </mxGraphModel>
-  </diagram>
-</mxfile>
+"""
+xAI Management API - Team/User Usage Report
+
+Produces a CSV with one row per (team, user, API key):
+  team_id, user_id, api_key_name, last_activity, total_messages, tokens, usd_spend
+
+How each column is derived:
+  - Users/keys:      GET  /auth/teams/{teamId}/api-keys  (apiKeyId -> userId, name)
+  - Usage analytics: POST /v1/billing/teams/{team_id}/usage
+      * $ spend        -> value "usd" / AGGREGATION_SUM
+      * total messages -> value "usd" / AGGREGATION_COUNT (count of billed requests)
+      * tokens         -> probed token field names (not officially documented;
+                          the script drops any field the API rejects)
+      * last activity  -> latest day in the range with nonzero spend/requests
+  - Grouping by "api_key_id" attributes usage to the key's creating user.
+
+Auth: management key (console.x.ai -> Settings -> Management Keys), NOT a regular API key.
+
+Env vars:
+  XAI_MANAGEMENT_KEY   management key
+  XAI_TEAM_IDS         comma-separated team IDs (a management key is scoped to a
+                       team or organization; list every team you want covered)
+
+Usage:
+  python xai_usage_report.py --days 30 --out usage_by_user.csv
+"""
+
+import argparse
+import csv
+import os
+import sys
+from datetime import datetime, timedelta, timezone
+
+import requests
+
+BASE_URL = "https://management-api.x.ai"
+
+# Candidate token metric names to probe (undocumented; console Usage Explorer
+# exposes token charts, but the docs only guarantee "usd"). Rejected names are skipped.
+TOKEN_FIELD_CANDIDATES = ["total_tokens", "tokens", "num_units"]
+
+
+def _headers(key: str) -> dict:
+    return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+
+
+def list_api_keys(key: str, team_id: str) -> dict:
+    """Return {apiKeyId: {"user_id": ..., "name": ...}} for a team (admin sees all keys)."""
+    keys, token = {}, ""
+    while True:
+        resp = requests.get(
+            f"{BASE_URL}/auth/teams/{team_id}/api-keys",
+            params={"pageSize": 100, "paginationToken": token},
+            headers=_headers(key),
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        for k in data.get("apiKeys", []):
+            keys[k["apiKeyId"]] = {
+                "user_id": k.get("userId", ""),
+                "name": k.get("name", ""),
+            }
+        token = data.get("paginationToken")
+        if not token:
+            break
+    return keys
+
+
+def query_usage(
+    key: str,
+    team_id: str,
+    start: datetime,
+    end: datetime,
+    values: list[dict],
+    group_by: list[str],
+) -> dict | None:
+    """Run one analytics query; return parsed JSON or None on a 4xx (bad field name)."""
+    payload = {
+        "analyticsRequest": {
+            "timeRange": {
+                "startTime": start.strftime("%Y-%m-%d %H:%M:%S"),
+                "endTime": end.strftime("%Y-%m-%d %H:%M:%S"),
+                "timezone": "Etc/GMT",
+            },
+            "timeUnit": "TIME_UNIT_DAY",
+            "values": values,
+            "groupBy": group_by,
+            "filters": [],
+        }
+    }
+    resp = requests.post(
+        f"{BASE_URL}/v1/billing/teams/{team_id}/usage",
+        json=payload,
+        headers=_headers(key),
+        timeout=60,
+    )
+    if 400 <= resp.status_code < 500:
+        return None
+    resp.raise_for_status()
+    return resp.json()
+
+
+def summarize(series: dict) -> dict:
+    """{group_label: {"sum0": float, "sum1": float, "last_activity": str}}"""
+    out = {}
+    for ts in series.get("timeSeries", []):
+        label = (ts.get("group") or ts.get("groupLabels") or ["?"])[0]
+        sums = [0.0, 0.0]
+        last = ""
+        for p in ts.get("dataPoints", []):
+            vals = p.get("values") or []
+            for i, v in enumerate(vals[:2]):
+                sums[i] += v
+            if any(v > 0 for v in vals):
+                last = p["timestamp"][:10]
+        out[label] = {"sum0": sums[0], "sum1": sums[1], "last_activity": last}
+    return out
+
+
+def report_team(key: str, team_id: str, start: datetime, end: datetime) -> list[dict]:
+    key_info = list_api_keys(key, team_id)
+
+    # $ spend (SUM) + billed-request count (COUNT) per API key, in one query
+    usage = query_usage(
+        key, team_id, start, end,
+        values=[
+            {"name": "usd", "aggregation": "AGGREGATION_SUM"},
+            {"name": "usd", "aggregation": "AGGREGATION_COUNT"},
+        ],
+        group_by=["api_key_id"],
+    )
+    if usage is None:
+        sys.exit(f"Team {team_id}: usage query rejected — check team ID / key permissions.")
+    spend = summarize(usage)
+
+    # Tokens: probe undocumented field names, keep the first one the API accepts
+    tokens = {}
+    for field in TOKEN_FIELD_CANDIDATES:
+        res = query_usage(
+            key, team_id, start, end,
+            values=[{"name": field, "aggregation": "AGGREGATION_SUM"}],
+            group_by=["api_key_id"],
+        )
+        if res is not None:
+            tokens = {k: v["sum0"] for k, v in summarize(res).items()}
+            print(f"  token metric used: '{field}'")
+            break
+    else:
+        print("  no token field accepted by API — tokens column left blank")
+
+    rows = []
+    for key_id, s in spend.items():
+        info = key_info.get(key_id, {"user_id": "(unknown)", "name": key_id})
+        rows.append({
+            "team_id": team_id,
+            "user_id": info["user_id"],
+            "api_key_name": info["name"],
+            "last_activity": s["last_activity"] or "(none in range)",
+            "total_messages": int(s["sum1"]),
+            "tokens": int(tokens.get(key_id, 0)) if tokens else "",
+            "usd_spend": round(s["sum0"], 4),
+        })
+    if usage.get("limitReached"):
+        print(f"  warning: cardinality limit reached for team {team_id}; partial results")
+    return rows
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="xAI usage report by team/user")
+    parser.add_argument("--days", type=int, default=30)
+    parser.add_argument("--out", default="usage_by_user.csv")
+    args = parser.parse_args()
+
+    key = os.environ.get("XAI_MANAGEMENT_KEY")
+    team_ids = [t.strip() for t in os.environ.get("XAI_TEAM_IDS", "").split(",") if t.strip()]
+    if not key or not team_ids:
+        sys.exit("Set XAI_MANAGEMENT_KEY and XAI_TEAM_IDS (comma-separated).")
+
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=args.days)
+
+    all_rows = []
+    for team_id in team_ids:
+        print(f"Team {team_id} ...")
+        all_rows.extend(report_team(key, team_id, start, end))
+
+    fields = ["team_id", "user_id", "api_key_name", "last_activity",
+              "total_messages", "tokens", "usd_spend"]
+    with open(args.out, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(sorted(all_rows, key=lambda r: -r["usd_spend"]))
+
+    total = sum(r["usd_spend"] for r in all_rows)
+    print(f"\nWrote {args.out} ({len(all_rows)} rows). "
+          f"Total spend {start.date()} -> {end.date()}: ${total:.2f}")
+
+
+if __name__ == "__main__":
+    main()
