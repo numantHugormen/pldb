@@ -1,100 +1,57 @@
 import os
 import requests
 import pandas as pd
-from datetime import datetime
 from dotenv import load_dotenv
 
-# ==========================================
-# Load Environment Variables
-# ==========================================
 load_dotenv()
 
 MANAGEMENT_API_KEY = os.getenv("XAI_MANAGEMENT_API_KEY")
-
 if not MANAGEMENT_API_KEY:
-    raise ValueError("Error: 'XAI_MANAGEMENT_API_KEY' not found in environment or .env file.")
+    raise ValueError("Error: 'XAI_MANAGEMENT_API_KEY' not found in environment.")
 
-BASE_URL = "https://management-api.x.ai/v1"
-
+# xAI Management API Base URL (No /v1 prefix)
+BASE_URL = "https://management-api.x.ai"
 HEADERS = {
     "Authorization": f"Bearer {MANAGEMENT_API_KEY}",
     "Content-Type": "application/json"
 }
 
-def fetch_usage_report() -> pd.DataFrame:
-    """Fetch usage activity logs from xAI Management API and aggregate metrics."""
-    session = requests.Session()
-    
-    # Query team usage endpoint
-    usage_url = f"{BASE_URL}/usage"
-    params = {"limit": 100}
-    
-    user_stats = {}
+def fetch_audit_logs() -> pd.DataFrame:
+    """Fetch admin and user activity logs from xAI Management API."""
+    url = f"{BASE_URL}/audit-logs"
+    params = {"pageSize": 100}
     
     try:
-        response = session.get(usage_url, headers=HEADERS, params=params)
+        response = requests.get(url, headers=HEADERS, params=params)
         response.raise_for_status()
         data = response.json()
         
-        # Parse usage entries
-        records = data.get("usage") or data.get("data") or []
-        
-        for record in records:
-            # Identify user or key ID
-            user_identifier = (
-                record.get("user_name") 
-                or record.get("user_id") 
-                or record.get("api_key_id") 
-                or "Unknown User/Key"
-            )
+        events = data.get("auditEvents", data.get("events", []))
+        if not events:
+            print("No audit events found.")
+            return pd.DataFrame()
             
-            timestamp = record.get("created_at") or record.get("timestamp")
-            messages = record.get("message_count") or record.get("requests", 1)
+        records = []
+        for event in events:
+            user_id = event.get("userId") or event.get("actor", {}).get("id", "System/API")
+            event_type = event.get("eventType") or event.get("description", "Activity")
+            timestamp = event.get("eventTime") or event.get("created_at")
             
-            if user_identifier not in user_stats:
-                user_stats[user_identifier] = {
-                    "User Name / ID": user_identifier,
-                    "Last Activity": timestamp,
-                    "Total Messages": 0
-                }
-                
-            user_stats[user_identifier]["Total Messages"] += messages
+            records.append({
+                "User / Actor ID": user_id,
+                "Event": event_type,
+                "Timestamp": timestamp
+            })
             
-            # Keep the most recent timestamp
-            if timestamp and (
-                user_stats[user_identifier]["Last Activity"] is None 
-                or timestamp > user_stats[user_identifier]["Last Activity"]
-            ):
-                user_stats[user_identifier]["Last Activity"] = timestamp
-                
+        df = pd.DataFrame(records)
+        df["Timestamp"] = pd.to_datetime(df["Timestamp"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+        return df
+
     except requests.exceptions.HTTPError as e:
-        print(f"[Error] Management API request failed ({e.response.status_code}): {e.response.text}")
-        return pd.DataFrame()
-    except requests.exceptions.RequestException as e:
-        print(f"[Error] Request error: {e}")
+        print(f"[HTTP Error {e.response.status_code}]: {e.response.text}")
         return pd.DataFrame()
 
-    # Format into DataFrame
-    df = pd.DataFrame(list(user_stats.values()))
-    
-    if not df.empty and "Last Activity" in df.columns:
-        df["Last Activity"] = pd.to_datetime(df["Last Activity"]).dt.strftime("%Y-%m-%d %H:%M:%S")
-        df = df.sort_values(by="Total Messages", ascending=False).reset_index(drop=True)
-        
-    return df
-
-# ==========================================
-# Execution
-# ==========================================
 if __name__ == "__main__":
-    print("Generating Grok Enterprise Usage Report...")
-    report_df = fetch_usage_report()
-    
-    if not report_df.empty:
-        print("\n--- Usage Report ---")
-        print(report_df.to_string(index=False))
-        
-        report_df.to_csv("grok_enterprise_usage_report.csv", index=False)
-        print("\nReport successfully saved to 'grok_enterprise_usage_report.csv'")
-    else:
-        print("No usage data returned or API request was unfulfilled.")
+    df = fetch_audit_logs()
+    if not df.empty:
+        print(df.to_string(index=False))
