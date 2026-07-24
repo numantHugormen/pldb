@@ -1,42 +1,42 @@
-# Connect to Microsoft Graph with required permissions
-Connect-MgGraph -Scopes "Group.Read.All", "User.Read.All"
+Install-Module -Name Az -AllowClobber -Scope CurrentUser
+Connect-AzAccount
 
-# Define the group prefix
+# Define the prefix to search for
 $groupPrefix = "Grok_"
 
-# Fetch groups matching the prefix
-$groups = Get-MgGroup -Filter "startswith(displayName, '$groupPrefix')" -All
+# Fetch groups starting with the prefix
+$groups = Get-AzADGroup -DisplayNameStartsWith $groupPrefix
 
 if (-not $groups) {
     Write-Host "No groups found starting with '$groupPrefix'" -ForegroundColor Yellow
     return
 }
 
-# Array to store the combined results
+# Array list to store report items
 $report = [System.Collections.Generic.List[PSCustomObject]]::new()
 
 foreach ($group in $groups) {
     Write-Host "Processing group: $($group.DisplayName)" -ForegroundColor Cyan
-    
-    # Retrieve members for the group (filtered to only include Users)
-    $members = Get-MgGroupMember -GroupId $group.Id -All | Where-Object { $_.AdditionalProperties['@odata.type'] -eq '#microsoft.graph.user' }
-    
+
+    # Fetch members of the group
+    $members = Get-AzADGroupMember -GroupObjectId $group.Id
+
     foreach ($member in $members) {
-        # Retrieve detailed user properties
-        $user = Get-MgUser -UserId $member.Id -Property DisplayName, UserPrincipalName, Mail
-        
-        $report.Add([PSCustomObject]@{
-            GroupName          = $group.DisplayName
-            GroupId            = $group.Id
-            UserDisplayName    = $user.DisplayName
-            UserPrincipalName  = $user.UserPrincipalName
-            UserEmail          = $user.Mail
-        })
+        # Filter strictly for 'User' objects to ignore nested groups or devices
+        if ($member.Type -eq 'User' -or $member.UserPrincipalName) {
+            $report.Add([PSCustomObject]@{
+                GroupName         = $group.DisplayName
+                GroupId           = $group.Id
+                UserDisplayName   = $member.DisplayName
+                UserPrincipalName = $member.UserPrincipalName
+                UserEmail         = $member.Mail
+            })
+        }
     }
 }
 
-# Display results in the console
+# Output the results in console format
 $report | Format-Table -AutoSize
 
 # Export to CSV (optional)
-# $report | Export-Csv -Path ".\Grok_Group_Users.csv" -NoTypeInformation -Encoding UTF8
+# $report | Export-Csv -Path ".\Grok_Group_Users_Az.csv" -NoTypeInformation -Encoding UTF8
