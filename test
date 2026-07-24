@@ -1,208 +1,109 @@
-"""
-xAI Management API - Team/User Usage Report
-
-Produces a CSV with one row per (team, user, API key):
-  team_id, user_id, api_key_name, last_activity, total_messages, tokens, usd_spend
-
-How each column is derived:
-  - Users/keys:      GET  /auth/teams/{teamId}/api-keys  (apiKeyId -> userId, name)
-  - Usage analytics: POST /v1/billing/teams/{team_id}/usage
-      * $ spend        -> value "usd" / AGGREGATION_SUM
-      * total messages -> value "usd" / AGGREGATION_COUNT (count of billed requests)
-      * tokens         -> probed token field names (not officially documented;
-                          the script drops any field the API rejects)
-      * last activity  -> latest day in the range with nonzero spend/requests
-  - Grouping by "api_key_id" attributes usage to the key's creating user.
-
-Auth: management key (console.x.ai -> Settings -> Management Keys), NOT a regular API key.
-
-Env vars:
-  XAI_MANAGEMENT_KEY   management key
-  XAI_TEAM_IDS         comma-separated team IDs (a management key is scoped to a
-                       team or organization; list every team you want covered)
-
-Usage:
-  python xai_usage_report.py --days 30 --out usage_by_user.csv
-# PowerShell
-$env:XAI_MANAGEMENT_KEY = "xai-mgmt-..."
-$env:XAI_TEAM_IDS = "team-id-1"
-python xai_usage_report.py --days 30
-
-
-
-"""
-
-import argparse
-import csv
 import os
-import sys
-from datetime import datetime, timedelta, timezone
-
 import requests
+import pandas as pd
+from datetime import datetime
+from dotenv import load_dotenv
 
-BASE_URL = "https://management-api.x.ai"
+# ==========================================
+# Load Environment Variables from .env
+# ==========================================
+load_dotenv()
 
-# Candidate token metric names to probe (undocumented; console Usage Explorer
-# exposes token charts, but the docs only guarantee "usd"). Rejected names are skipped.
-TOKEN_FIELD_CANDIDATES = ["total_tokens", "tokens", "num_units"]
+MANAGEMENT_API_KEY = os.getenv("XAI_MANAGEMENT_API_KEY")
 
+if not MANAGEMENT_API_KEY:
+    raise ValueError("Error: 'XAI_MANAGEMENT_API_KEY' not found in .env file or environment.")
 
-def _headers(key: str) -> dict:
-    return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+BASE_URL = "https://management-api.x.ai/v1"
 
+HEADERS = {
+    "Authorization": f"Bearer {MANAGEMENT_API_KEY}",
+    "Content-Type": "application/json"
+}
 
-def list_api_keys(key: str, team_id: str) -> dict:
-    """Return {apiKeyId: {"user_id": ..., "name": ...}} for a team (admin sees all keys)."""
-    keys, token = {}, ""
-    while True:
-        resp = requests.get(
-            f"{BASE_URL}/auth/teams/{team_id}/api-keys",
-            params={"pageSize": 100, "paginationToken": token},
-            headers=_headers(key),
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        for k in data.get("apiKeys", []):
-            keys[k["apiKeyId"]] = {
-                "user_id": k.get("userId", ""),
-                "name": k.get("name", ""),
-            }
-        token = data.get("paginationToken")
-        if not token:
-            break
-    return keys
+def get_team_members(session: requests.Session) -> dict:
+    """Fetch user mapping (user_id -> user_name/email) across the team."""
+    url = f"{BASE_URL}/users"
+    members = {}
+    
+    try:
+        response = session.get(url, headers=HEADERS)
+        response.raise_for_status()
+        data = response.json()
+        
+        user_list = data.get("users", data.get("data", []))
+        for user in user_list:
+            user_id = user.get("id") or user.get("user_id")
+            name = user.get("name") or user.get("email") or f"User_{user_id}"
+            members[user_id] = name
+            
+    except requests.exceptions.HTTPError as e:
+        print(f"[Warning] Could not fetch user directory: {e}")
+        
+    return members
 
+def fetch_usage_report() -> pd.DataFrame:
+    """Query usage logs and aggregate activity metrics per user."""
+    session = requests.Session()
+    
+    # 1. Fetch user directory map
+    user_map = get_team_members(session)
+    
+    # 2. Fetch team usage records
+    usage_url = f"{BASE_URL}/usage"
+    params = {"limit": 100}
+    
+    user_stats = {}
+    
+    try:
+        response = session.get(usage_url, headers=HEADERS, params=params)
+        response.raise_for_status()
+        records = response.json().get("usage", response.json().get("data", []))
+        
+        for record in records:
+            user_id = record.get("user_id", "unknown_user")
+            user_name = user_map.get(user_id, record.get("user_name", user_id))
+            
+            timestamp = record.get("created_at") or record.get("timestamp")
+            messages = record.get("message_count") or record.get("requests", 1)
+            
+            if user_name not in user_stats:
+                user_stats[user_name] = {
+                    "User Name": user_name,
+                    "Last Activity": timestamp,
+                    "Total Messages": 0
+                }
+                
+            user_stats[user_name]["Total Messages"] += messages
+            
+            if timestamp and (user_stats[user_name]["Last Activity"] is None or timestamp > user_stats[user_name]["Last Activity"]):
+                user_stats[user_name]["Last Activity"] = timestamp
+                
+    except requests.exceptions.RequestException as e:
+        print(f"[Error] Failed to fetch usage metrics: {e}")
+        return pd.DataFrame()
 
-def query_usage(
-    key: str,
-    team_id: str,
-    start: datetime,
-    end: datetime,
-    values: list[dict],
-    group_by: list[str],
-) -> dict | None:
-    """Run one analytics query; return parsed JSON or None on a 4xx (bad field name)."""
-    payload = {
-        "analyticsRequest": {
-            "timeRange": {
-                "startTime": start.strftime("%Y-%m-%d %H:%M:%S"),
-                "endTime": end.strftime("%Y-%m-%d %H:%M:%S"),
-                "timezone": "Etc/GMT",
-            },
-            "timeUnit": "TIME_UNIT_DAY",
-            "values": values,
-            "groupBy": group_by,
-            "filters": [],
-        }
-    }
-    resp = requests.post(
-        f"{BASE_URL}/v1/billing/teams/{team_id}/usage",
-        json=payload,
-        headers=_headers(key),
-        timeout=60,
-    )
-    if 400 <= resp.status_code < 500:
-        return None
-    resp.raise_for_status()
-    return resp.json()
+    # 3. Format and clean output
+    df = pd.DataFrame(list(user_stats.values()))
+    
+    if not df.empty and "Last Activity" in df.columns:
+        df["Last Activity"] = pd.to_datetime(df["Last Activity"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+        df = df.sort_values(by="Total Messages", ascending=False).reset_index(drop=True)
+        
+    return df
 
-
-def summarize(series: dict) -> dict:
-    """{group_label: {"sum0": float, "sum1": float, "last_activity": str}}"""
-    out = {}
-    for ts in series.get("timeSeries", []):
-        label = (ts.get("group") or ts.get("groupLabels") or ["?"])[0]
-        sums = [0.0, 0.0]
-        last = ""
-        for p in ts.get("dataPoints", []):
-            vals = p.get("values") or []
-            for i, v in enumerate(vals[:2]):
-                sums[i] += v
-            if any(v > 0 for v in vals):
-                last = p["timestamp"][:10]
-        out[label] = {"sum0": sums[0], "sum1": sums[1], "last_activity": last}
-    return out
-
-
-def report_team(key: str, team_id: str, start: datetime, end: datetime) -> list[dict]:
-    key_info = list_api_keys(key, team_id)
-
-    # $ spend (SUM) + billed-request count (COUNT) per API key, in one query
-    usage = query_usage(
-        key, team_id, start, end,
-        values=[
-            {"name": "usd", "aggregation": "AGGREGATION_SUM"},
-            {"name": "usd", "aggregation": "AGGREGATION_COUNT"},
-        ],
-        group_by=["api_key_id"],
-    )
-    if usage is None:
-        sys.exit(f"Team {team_id}: usage query rejected — check team ID / key permissions.")
-    spend = summarize(usage)
-
-    # Tokens: probe undocumented field names, keep the first one the API accepts
-    tokens = {}
-    for field in TOKEN_FIELD_CANDIDATES:
-        res = query_usage(
-            key, team_id, start, end,
-            values=[{"name": field, "aggregation": "AGGREGATION_SUM"}],
-            group_by=["api_key_id"],
-        )
-        if res is not None:
-            tokens = {k: v["sum0"] for k, v in summarize(res).items()}
-            print(f"  token metric used: '{field}'")
-            break
-    else:
-        print("  no token field accepted by API — tokens column left blank")
-
-    rows = []
-    for key_id, s in spend.items():
-        info = key_info.get(key_id, {"user_id": "(unknown)", "name": key_id})
-        rows.append({
-            "team_id": team_id,
-            "user_id": info["user_id"],
-            "api_key_name": info["name"],
-            "last_activity": s["last_activity"] or "(none in range)",
-            "total_messages": int(s["sum1"]),
-            "tokens": int(tokens.get(key_id, 0)) if tokens else "",
-            "usd_spend": round(s["sum0"], 4),
-        })
-    if usage.get("limitReached"):
-        print(f"  warning: cardinality limit reached for team {team_id}; partial results")
-    return rows
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="xAI usage report by team/user")
-    parser.add_argument("--days", type=int, default=30)
-    parser.add_argument("--out", default="usage_by_user.csv")
-    args = parser.parse_args()
-
-    key = os.environ.get("XAI_MANAGEMENT_KEY")
-    team_ids = [t.strip() for t in os.environ.get("XAI_TEAM_IDS", "").split(",") if t.strip()]
-    if not key or not team_ids:
-        sys.exit("Set XAI_MANAGEMENT_KEY and XAI_TEAM_IDS (comma-separated).")
-
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(days=args.days)
-
-    all_rows = []
-    for team_id in team_ids:
-        print(f"Team {team_id} ...")
-        all_rows.extend(report_team(key, team_id, start, end))
-
-    fields = ["team_id", "user_id", "api_key_name", "last_activity",
-              "total_messages", "tokens", "usd_spend"]
-    with open(args.out, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fields)
-        writer.writeheader()
-        writer.writerows(sorted(all_rows, key=lambda r: -r["usd_spend"]))
-
-    total = sum(r["usd_spend"] for r in all_rows)
-    print(f"\nWrote {args.out} ({len(all_rows)} rows). "
-          f"Total spend {start.date()} -> {end.date()}: ${total:.2f}")
-
-
+# ==========================================
+# Execution
+# ==========================================
 if __name__ == "__main__":
-    main()
+    print("Generating Grok Enterprise Usage Report...")
+    report_df = fetch_usage_report()
+    
+    if not report_df.empty:
+        print("\n--- Usage Report ---")
+        print(report_df.to_string(index=False))
+        
+        report_df.to_csv("grok_enterprise_usage_report.csv", index=False)
+        print("\nReport successfully saved to 'grok_enterprise_usage_report.csv'")
+    else:
+        print("No usage data returned.")
