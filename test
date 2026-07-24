@@ -5,14 +5,14 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 # ==========================================
-# Load Environment Variables from .env
+# Load Environment Variables
 # ==========================================
 load_dotenv()
 
 MANAGEMENT_API_KEY = os.getenv("XAI_MANAGEMENT_API_KEY")
 
 if not MANAGEMENT_API_KEY:
-    raise ValueError("Error: 'XAI_MANAGEMENT_API_KEY' not found in .env file or environment.")
+    raise ValueError("Error: 'XAI_MANAGEMENT_API_KEY' not found in environment or .env file.")
 
 BASE_URL = "https://management-api.x.ai/v1"
 
@@ -21,35 +21,11 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-def get_team_members(session: requests.Session) -> dict:
-    """Fetch user mapping (user_id -> user_name/email) across the team."""
-    url = f"{BASE_URL}/users"
-    members = {}
-    
-    try:
-        response = session.get(url, headers=HEADERS)
-        response.raise_for_status()
-        data = response.json()
-        
-        user_list = data.get("users", data.get("data", []))
-        for user in user_list:
-            user_id = user.get("id") or user.get("user_id")
-            name = user.get("name") or user.get("email") or f"User_{user_id}"
-            members[user_id] = name
-            
-    except requests.exceptions.HTTPError as e:
-        print(f"[Warning] Could not fetch user directory: {e}")
-        
-    return members
-
 def fetch_usage_report() -> pd.DataFrame:
-    """Query usage logs and aggregate activity metrics per user."""
+    """Fetch usage activity logs from xAI Management API and aggregate metrics."""
     session = requests.Session()
     
-    # 1. Fetch user directory map
-    user_map = get_team_members(session)
-    
-    # 2. Fetch team usage records
+    # Query team usage endpoint
     usage_url = f"{BASE_URL}/usage"
     params = {"limit": 100}
     
@@ -58,32 +34,47 @@ def fetch_usage_report() -> pd.DataFrame:
     try:
         response = session.get(usage_url, headers=HEADERS, params=params)
         response.raise_for_status()
-        records = response.json().get("usage", response.json().get("data", []))
+        data = response.json()
+        
+        # Parse usage entries
+        records = data.get("usage") or data.get("data") or []
         
         for record in records:
-            user_id = record.get("user_id", "unknown_user")
-            user_name = user_map.get(user_id, record.get("user_name", user_id))
+            # Identify user or key ID
+            user_identifier = (
+                record.get("user_name") 
+                or record.get("user_id") 
+                or record.get("api_key_id") 
+                or "Unknown User/Key"
+            )
             
             timestamp = record.get("created_at") or record.get("timestamp")
             messages = record.get("message_count") or record.get("requests", 1)
             
-            if user_name not in user_stats:
-                user_stats[user_name] = {
-                    "User Name": user_name,
+            if user_identifier not in user_stats:
+                user_stats[user_identifier] = {
+                    "User Name / ID": user_identifier,
                     "Last Activity": timestamp,
                     "Total Messages": 0
                 }
                 
-            user_stats[user_name]["Total Messages"] += messages
+            user_stats[user_identifier]["Total Messages"] += messages
             
-            if timestamp and (user_stats[user_name]["Last Activity"] is None or timestamp > user_stats[user_name]["Last Activity"]):
-                user_stats[user_name]["Last Activity"] = timestamp
+            # Keep the most recent timestamp
+            if timestamp and (
+                user_stats[user_identifier]["Last Activity"] is None 
+                or timestamp > user_stats[user_identifier]["Last Activity"]
+            ):
+                user_stats[user_identifier]["Last Activity"] = timestamp
                 
+    except requests.exceptions.HTTPError as e:
+        print(f"[Error] Management API request failed ({e.response.status_code}): {e.response.text}")
+        return pd.DataFrame()
     except requests.exceptions.RequestException as e:
-        print(f"[Error] Failed to fetch usage metrics: {e}")
+        print(f"[Error] Request error: {e}")
         return pd.DataFrame()
 
-    # 3. Format and clean output
+    # Format into DataFrame
     df = pd.DataFrame(list(user_stats.values()))
     
     if not df.empty and "Last Activity" in df.columns:
@@ -106,4 +97,4 @@ if __name__ == "__main__":
         report_df.to_csv("grok_enterprise_usage_report.csv", index=False)
         print("\nReport successfully saved to 'grok_enterprise_usage_report.csv'")
     else:
-        print("No usage data returned.")
+        print("No usage data returned or API request was unfulfilled.")
