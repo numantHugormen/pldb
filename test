@@ -1,3 +1,178 @@
+# Spot Fleet Data Lake — Orbit API-Based Design
+
+> Source of truth: **Boston Dynamics Orbit** (formerly Scout) — the fleet data
+> centralization platform. Orbit collects, organizes, and stores data from
+> every mission and teleoperation session executed by the Spot fleet. The lake
+> consumes it via the **Orbit Web API**: REST over HTTPS, `Bearer`-token auth,
+> all resources under `/api/v0/`.
+>
+> References:
+> - Spot SDK repo: https://github.com/boston-dynamics/spot-sdk (v5.1.9)
+> - Orbit API docs: `docs/concepts/orbit/orbit_api.md` in the repo
+> - `bosdyn-orbit` Python package: `python/bosdyn-orbit/src/bosdyn/orbit/`
+> - Full OAS3 spec: your Orbit instance's API reference
+>   (`docs/orbit/docs` on dev.bostondynamics.com)
+
+---
+
+## 1. What data Spot produces (SDK-side inventory)
+
+Every Python client under `bosdyn/client/` maps to a **gRPC service running on
+the robot**. These services are the ultimate producers of the data Orbit
+aggregates. Understanding them tells you what content to expect in runs,
+captures, and run logs.
+
+| Domain | SDK source | Data shape | Rate/volume |
+|---|---|---|---|
+| **Telemetry / robot state** | `robot_state.py` | Protobuf: joint states, kinematics, foot contacts, battery, power state, behavior faults, E-stop | ~15 Hz on the robot; lands in Orbit per-run via run logs |
+| **Imagery** | `image.py`, `spot_cam/`, `gripper_camera_param.py` | 5 fisheye grayscale + front stereo color; Spot CAM adds PTZ; JPEG/PNG + proto metadata | On demand (heavy: MB/frame) |
+| **Point clouds / LIDAR** | `point_cloud.py`, `local_grid.py` | EAP LIDAR point clouds; terrain/obstacle local grids | On demand |
+| **World objects** | `world_object.py` | Fiducials (AprilTags), detected objects, door handles — 3D pose + frame transforms | Per request |
+| **Logs & BDDF** | `bddf.py`, `bddf_download.py`, `recording.py`, `log_status.py` | **BDDF** (Boston Dynamics Data Format) — black-box recorder: signals, comments, faults; `.walk` recordings | Batch offload |
+| **Autonomy / maps** | `graph_nav.py`, `autowalk.py`, `map_processing.py` | `.walk` folders (graph maps, anchoring, point clouds), mission state, AutoWalk programs | Per mapping/mission |
+| **Data Acquisition (payloads)** | `data_acquisition.py`, `data_acquisition_store.py`, `data_acquisition_plugin.py` | Payload sensor captures (thermal, gas, PTZ — anything plugged into Spot) | Per capture request |
+| **Health & faults** | `spot_check.py`, `fault.py`, `metrics_logging.py` | Diagnostics, service faults, metrics RPCs | On demand / event |
+| **Fleet admin** | `robot_id.py`, `payload.py`, `license.py` | Robot serial, nickname, firmware, payload registry, software versions | Slow-changing reference |
+| **Time sync** | `time_sync.py` | Robot clock ↔ client clock offsets | Every session (robot-direct only) |
+
+Orbit sits on top of all of this: the robots upload mission runs, captures,
+and logs to Orbit, and you consume the already-centralized result via REST.
+
+---
+
+## 2. What the Orbit API provides
+
+All endpoints live under `https://<your-orbit>/api/v0/`, Bearer-token auth
+(token created in Orbit admin settings; sent as
+`{'Authorization': 'Bearer ' + <token>}` on every request).
+
+| Resource | Endpoint | What it is | Lake role |
+|---|---|---|---|
+| **Robots** | `GET /robots`, `/robots/{hostname}` | Fleet registry: robots, slot assignments | Reference data |
+| **Runs** | `GET /runs/`, `/runs/{uuid}` | One execution of a mission or teleop session | Core fact table |
+| **RunEvents** | `GET /run_events/`, `/run_events/{uuid}` | Actions inside a run | Child of Run |
+| **RunCaptures** | `GET /run_captures/`, `/run_captures/{uuid}` | Captured data points (thermal image, gauge reading, …), linked to a RunEvent | The inspection data itself |
+| **Run Archives** | `GET /run_archives/{runId}` | Zip of a whole run's data — bulk download | Bulk ingest / backfill |
+| **Run log** | `GET /runs/{uuid}/log` | Robot log for the run (robot_state / BDDF-style content) | Telemetry |
+| **SiteWalks** | `GET /site_walks/`, `/{uuid}` | Mission definitions (the *plan*, vs runs = the *execution*) | Reference / dimension |
+| **SiteElements** | `GET /site_elements/{uuid}` | Tasks within a SiteWalk, attempted in sequence | Reference / dimension |
+| **SiteDocks** | `GET /site_docks/{uuid}` | Dock definitions | Reference / dimension |
+| **Missions** | `GET /missions`, `/{missionId}` | Mission info | Reference |
+| **Calendar** | `GET /calendar/schedule` | Scheduled mission events | Reference |
+| **Anomalies** | `GET /anomalies` (`PATCH` to triage/close) | Flagged findings from data review — high value | Gold-feeding fact |
+| **Run Statistics** | `GET /run_statistics/sessions`, `/sessions_summary` | Pre-aggregated session stats | Shortcut to Gold |
+| **Facets** | `GET /runs/facets/robots\|missions\|actions` | Pre-built unique lists + counts | Shortcut to Gold |
+| **Webhooks** | `GET/POST /webhooks`, `/{uuid}` | Callback registration on Orbit | Near-real-time ingest trigger |
+| **Backups** | `GET/POST /backup_tasks`, `GET /backups/{taskId}` | Orbit instance backup tar files | Ops / disaster recovery (not lake data) |
+| **Version / system time** | `GET /version`, `GET /settings/system-time` | Instance metadata | `_meta/` bookkeeping |
+
+### 2.1 Object model
+
+```text
+SiteWalk (the mission plan: SiteElements + SiteDocks in sequence)
+└── Run (one execution — mission or teleop)
+    ├── RunEvent (an action; a run has many)
+    │   └── RunCapture (a data point; an event has many)
+    └── Run log (robot-side telemetry for the run)
+
+Anomaly ──(references)──▶ capture / site element
+```````markdown
+# Spot Fleet Data Lake — Orbit API-Based Design
+
+> Source of truth: **Boston Dynamics Orbit** (formerly Scout) — the fleet data
+> centralization platform. Orbit collects, organizes, and stores data from
+> every mission and teleoperation session executed by the Spot fleet. The lake
+> consumes it via the **Orbit Web API**: REST over HTTPS, `Bearer`-token auth,
+> all resources under `/api/v0/`.
+>
+> References:
+> - Spot SDK repo: <https://github.com/boston-dynamics/spot-sdk> (v5.1.9)
+> - Orbit API docs: `docs/concepts/orbit/orbit_api.md` in the repo
+> - `bosdyn-orbit` Python package: `python/bosdyn-orbit/src/bosdyn/orbit/`
+> - Full OAS3 spec: your Orbit instance's API reference
+>   (`docs/orbit/docs` on dev.bostondynamics.com)
+
+---
+
+## 1. What data Spot produces (SDK-side inventory)
+
+Every Python client under `bosdyn/client/` maps to a **gRPC service running on
+the robot**. These services are the ultimate producers of the data Orbit
+aggregates. Understanding them tells you what content to expect in runs,
+captures, and run logs.
+
+| Domain | SDK source | Data shape | Rate/volume |
+|---|---|---|---|
+| **Telemetry / robot state** | `robot_state.py` | Protobuf: joint states, kinematics, foot contacts, battery, power state, behavior faults, E-stop | ~15 Hz on the robot; lands in Orbit per-run via run logs |
+| **Imagery** | `image.py`, `spot_cam/`, `gripper_camera_param.py` | 5 fisheye grayscale + front stereo color; Spot CAM adds PTZ; JPEG/PNG + proto metadata | On demand (heavy: MB/frame) |
+| **Point clouds / LIDAR** | `point_cloud.py`, `local_grid.py` | EAP LIDAR point clouds; terrain/obstacle local grids | On demand |
+| **World objects** | `world_object.py` | Fiducials (AprilTags), detected objects, door handles — 3D pose + frame transforms | Per request |
+| **Logs & BDDF** | `bddf.py`, `bddf_download.py`, `recording.py`, `log_status.py` | **BDDF** (Boston Dynamics Data Format) — black-box recorder: signals, comments, faults; `.walk` recordings | Batch offload |
+| **Autonomy / maps** | `graph_nav.py`, `autowalk.py`, `map_processing.py` | `.walk` folders (graph maps, anchoring, point clouds), mission state, AutoWalk programs | Per mapping/mission |
+| **Data Acquisition (payloads)** | `data_acquisition.py`, `data_acquisition_store.py`, `data_acquisition_plugin.py` | Payload sensor captures (thermal, gas, PTZ — anything plugged into Spot) | Per capture request |
+| **Health & faults** | `spot_check.py`, `fault.py`, `metrics_logging.py` | Diagnostics, service faults, metrics RPCs | On demand / event |
+| **Fleet admin** | `robot_id.py`, `payload.py`, `license.py` | Robot serial, nickname, firmware, payload registry, software versions | Slow-changing reference |
+| **Time sync** | `time_sync.py` | Robot clock ↔ client clock offsets | Every session (robot-direct only) |
+
+Orbit sits on top of all of this: the robots upload mission runs, captures,
+and logs to Orbit, and you consume the already-centralized result via REST.
+
+---
+
+## 2. What the Orbit API provides
+
+All endpoints live under `https://<your-orbit>/api/v0/`, Bearer-token auth
+(token created in Orbit admin settings; sent as
+`{'Authorization': 'Bearer ' + <token>}` on every request).
+
+| Resource | Endpoint | What it is | Lake role |
+|---|---|---|---|
+| **Robots** | `GET /robots`, `/robots/{hostname}` | Fleet registry: robots, slot assignments | Reference data |
+| **Runs** | `GET /runs/`, `/runs/{uuid}` | One execution of a mission or teleop session | Core fact table |
+| **RunEvents** | `GET /run_events/`, `/run_events/{uuid}` | Actions inside a run | Child of Run |
+| **RunCaptures** | `GET /run_captures/`, `/run_captures/{uuid}` | Captured data points (thermal image, gauge reading, …), linked to a RunEvent | The inspection data itself |
+| **Run Archives** | `GET /run_archives/{runId}` | Zip of a whole run's data — bulk download | Bulk ingest / backfill |
+| **Run log** | `GET /runs/{uuid}/log` | Robot log for the run (robot_state / BDDF-style content) | Telemetry |
+| **SiteWalks** | `GET /site_walks/`, `/{uuid}` | Mission definitions (the *plan*, vs runs = the *execution*) | Reference / dimension |
+| **SiteElements** | `GET /site_elements/{uuid}` | Tasks within a SiteWalk, attempted in sequence | Reference / dimension |
+| **SiteDocks** | `GET /site_docks/{uuid}` | Dock definitions | Reference / dimension |
+| **Missions** | `GET /missions`, `/{missionId}` | Mission info | Reference |
+| **Calendar** | `GET /calendar/schedule` | Scheduled mission events | Reference |
+| **Anomalies** | `GET /anomalies` (`PATCH` to triage/close) | Flagged findings from data review — high value | Gold-feeding fact |
+| **Run Statistics** | `GET /run_statistics/sessions`, `/sessions_summary` | Pre-aggregated session stats | Shortcut to Gold |
+| **Facets** | `GET /runs/facets/robots\|missions\|actions` | Pre-built unique lists + counts | Shortcut to Gold |
+| **Webhooks** | `GET/POST /webhooks`, `/{uuid}` | Callback registration on Orbit | Near-real-time ingest trigger |
+| **Backups** | `GET/POST /backup_tasks`, `GET /backups/{taskId}` | Orbit instance backup tar files | Ops / disaster recovery (not lake data) |
+| **Version / system time** | `GET /version`, `GET /settings/system-time` | Instance metadata | `_meta/` bookkeeping |
+
+### 2.1 Object model
+
+```text
+SiteWalk (the mission plan: SiteElements + SiteDocks in sequence)
+└── Run (one execution — mission or teleop)
+    ├── RunEvent (an action; a run has many)
+    │   └── RunCapture (a data point; an event has many)
+    └── Run log (robot-side telemetry for the run)
+
+Anomaly ──(references)──▶ capture / site element
+```
+
+**Always join on the uuid fields.** Names are not unique — the same mission run
+twice yields two `Runs` with identical `missionName` values.
+
+### 2.2 Python client
+
+The repo ships `bosdyn-orbit` (`python/bosdyn-orbit/`): `bosdyn.orbit.client.Client`
+wraps the whole API — `authenticate_with_api_token()`, `get_robots()`,
+`get_runs()`, `get_run_events()`, `get_run_captures()`, `get_run_log()`,
+`get_run_archives()`, `get_site_walks()`, `patch_anomaly_by_id()`, etc.
+The `hello_orbit` example is the starting point.
+
+---
+
+## 3. Lake structure
+
+```text
 data-lake/
 │
 ├── 00-landing/                          # Raw, exactly as received from Orbit
@@ -7,6 +182,8 @@ data-lake/
 │   │   └── capture=<uuid>.<fmt> + capture=<uuid>.json (sidecar metadata)
 │   ├── run_logs/                        # /runs/{uuid}/log raw payloads
 │   │   └── run=<uuid>_log.json
+│   ├── webhooks_events/                 # Raw webhook callback payloads
+│   │   └── dt=.../<uuid>.json
 │   └── api_snapshots/                   # Periodic full-resource GET dumps
 │       └── <resource>/dt=.../snapshot.json    # robots, site_walks, calendar, anomalies
 │
@@ -15,11 +192,13 @@ data-lake/
 │   ├── run_events/
 │   ├── run_captures/                    # metadata row per capture (bytes stay as files)
 │   ├── anomalies/
-│   ├── webhooks_events/                 # raw webhook callback payload log
+│   ├── webhooks_events/                 # typed webhook events
 │   ├── _ref_robots/                     # slowly-changing: snapshot + SCD-2 versioning
 │   ├── _ref_site_walks/
 │   ├── _ref_site_elements/
 │   ├── _ref_site_docks/
+│   ├── _ref_missions/
+│   ├── _ref_calendar/
 │   └── _quarantine/                     # failed validation, never silently dropped
 │
 ├── 02-silver/                           # Cleaned, conformed, joined
@@ -45,18 +224,162 @@ data-lake/
     ├── schemas/                         # pinned OpenAPI spec + Orbit object models
     └── ingestion/                       # per-resource watermarks: last_uuid,
                                          #   last_run_started_at
-
+```
 
 ---
 
-## 3. Design decisions
+## 4. Design decisions
 
-### 3.1 The Run is the partition key
-Not robot/time — `run_uuid` is Orbit's organizing unit. Bronze tables partition by
-`dt` (run start date) for query pruning, but every row carries `run_uuid`, plus
-`robot`, `mission_name`, and `site_walk_uuid` as columns. The dominant query
-patterns are "everything from run X" and "all runs of mission Y on robot Z this
-month".
+### 4.1 The Run is the partition key
+Not robot/time — `run_uuid` is Orbit's organizing unit. Bronze tables partition
+by `dt` (run start date) for query pruning, but every row carries `run_uuid`,
+plus `robot`, `mission_name`, and `site_walk_uuid` as columns. The dominant
+query patterns are "everything from run X" and "all runs of mission Y on robot
+Z this month".
 
-### 3.2 Two ingest modes
-- **Incremental polling** — `GET /runs
+### 4.2 Two ingest modes
+- **Incremental polling** — `GET /runs?started_at>watermark`, then fetch child
+  RunEvents / RunCaptures / run log. Watermarks live in `_meta/ingestion/`.
+- **Bulk backfill** — `GET /run_archives/{runId}` yields each run's complete
+  zip. Use to seed history and to re-derive anything mishandled downstream.
+  Keep zips in `00-landing/` untouched.
+
+### 4.3 Webhooks make it near-real-time
+Register a webhook (`POST /webhooks`) for new runs / completions. The listener
+appends the raw callback body to `00-landing/webhooks_events/` **first**
+(always keep the raw record), then triggers an incremental pull for that
+`run_uuid`. Webhooks are hints, not guarantees — keep the periodic poller as
+reconciliation.
+
+### 4.4 Anomalies are first-class
+This is the resource SDK-direct users don't get: human/algorithm-reviewed
+findings attached to inspection data (e.g. "thermal hotspot at gauge 3").
+Ingest it into bronze, promote to `03-gold/anomaly_pipeline/`. Note the write
+path: `PATCH /anomalies` (bulk close by element IDs, or patch by uuid) lets a
+downstream review UI triage/close anomalies directly against Orbit.
+
+### 4.5 Run Statistics + Facets = instant Gold
+BD pre-computes session statistics (`/run_statistics/sessions`,
+`/sessions_summary`) and per-mission run counts (`/runs/facets/missions`).
+Seed `03-gold/` from these on day one so dashboards work immediately; treat
+the lake's own silver-derived aggregations as eventually authoritative.
+Disagreement between the two is a built-in data-quality check.
+
+### 4.6 Run logs replace live robot_state streaming
+Robot-direct streaming (15 Hz `robot_state`, time sync) is gone; each run's
+log arrives post-hoc. Silver `telemetry/` is therefore **per-run**, not
+continuous. If live telemetry is needed later, re-add a robot-direct SDK
+side-car as an adjacent `ingest-spot-sdk/` tree (keep raw BDDF + protobuf
+bytes there, pin `protos/bosdyn/api/` per SDK version in `_meta/schemas/`).
+The lake layout above doesn't change.
+
+### 4.7 Pin the OpenAPI spec
+The OAS3 document is versioned (`5.0.0` at time of writing) and bronze schemas
+derive from it. Keep pinned copies in `_meta/schemas/` and stamp
+`orbit_version` / `api_version` columns on every table so a multi-instance or
+post```text
+data-lake/
+│
+├── 00-landing/                          # Raw, exactly as received from Orbit
+│   ├── run_archives/                    # Zips from /run_archives/{runId}
+│   │   └── dt=2026-09-01/run=<uuid>.zip
+│   ├── images/                          # Image bytes for run captures
+│   │   └── capture=<uuid>.<fmt> + capture=<uuid>.json (sidecar metadata)
+│   ├── run_logs/                        # /runs/{uuid}/log raw payloads
+│   │   └── run=<uuid>_log.json
+│   ├── webhooks_events/                 # Raw webhook callback payloads
+│   │   └── dt=.../<uuid>.json
+│   └── api_snapshots/                   # Periodic full-resource GET dumps
+│       └── <resource>/dt=.../snapshot.json    # robots, site_walks, calendar, anomalies
+│
+├── 01-bronze/                           # 1:1 with the Orbit OAS3 schemas — JSON → Parquet
+│   ├── runs/                            # dt=<date>/part-*.parquet
+│   ├── run_events/
+│   ├── run_captures/                    # metadata row per capture (bytes stay as files)
+│   ├── anomalies/
+│   ├── webhooks_events/                 # typed webhook events
+│   ├── _ref_robots/                     # slowly-changing: snapshot + SCD-2 versioning
+│   ├── _ref_site_walks/
+│   ├── _ref_site_elements/
+│   ├── _ref_site_docks/
+│   ├── _ref_missions/
+│   ├── _ref_calendar/
+│   └── _quarantine/                     # failed validation, never silently dropped
+│
+├── 02-silver/                           # Cleaned, conformed, joined
+│   ├── sessions/                        # one row per run: robot, mission, started_at,
+│   │                                    #   duration, event_count, capture_count, status
+│   ├── run_events_flat/                 # actions exploded, typed, parent run joined
+│   ├── captures_index/                  # every capture: type, run event, waypoint,
+│   │                                    #   media uri, pose, UTC capture time
+│   ├── telemetry/                       # parsed from run logs (battery, faults, odom)
+│   └── events/                          # unified timeline: anomalies, faults, failures
+│
+├── 03-gold/                             # Analytics / feature layer
+│   ├── mission_success_rate/            # per mission, per robot, per day
+│   ├── inspection_results/              # captures joined to anomalies — "the findings"
+│   ├── fleet_utilization_daily/
+│   ├── robot_health_metrics/            # fault rates, battery cycles, downtime
+│   ├── anomaly_pipeline/                # open → triage → close cycle times (Anomalies API)
+│   └── session_statistics/              # seeded from /run_statistics as fast-start,
+│                                        #   reconciled against own aggregations
+│
+└── _meta/
+    ├── orbit_instances/                 # instance hostname, API version, token scope
+    ├── schemas/                         # pinned OpenAPI spec + Orbit object models
+    └── ingestion/                       # per-resource watermarks: last_uuid,
+                                         #   last_run_started_at
+```
+
+---
+
+## 4. Design decisions
+
+### 4.1 The Run is the partition key
+Not robot/time — `run_uuid` is Orbit's organizing unit. Bronze tables partition
+by `dt` (run start date) for query pruning, but every row carries `run_uuid`,
+plus `robot`, `mission_name`, and `site_walk_uuid` as columns. The dominant
+query patterns are "everything from run X" and "all runs of mission Y on robot
+Z this month".
+
+### 4.2 Two ingest modes
+- **Incremental polling** — `GET /runs?started_at>watermark`, then fetch child
+  RunEvents / RunCaptures / run log. Watermarks live in `_meta/ingestion/`.
+- **Bulk backfill** — `GET /run_archives/{runId}` yields each run's complete
+  zip. Use to seed history and to re-derive anything mishandled downstream.
+  Keep zips in `00-landing/` untouched.
+
+### 4.3 Webhooks make it near-real-time
+Register a webhook (`POST /webhooks`) for new runs / completions. The listener
+appends the raw callback body to `00-landing/webhooks_events/` **first**
+(always keep the raw record), then triggers an incremental pull for that
+`run_uuid`. Webhooks are hints, not guarantees — keep the periodic poller as
+reconciliation.
+
+### 4.4 Anomalies are first-class
+This is the resource SDK-direct users don't get: human/algorithm-reviewed
+findings attached to inspection data (e.g. "thermal hotspot at gauge 3").
+Ingest it into bronze, promote to `03-gold/anomaly_pipeline/`. Note the write
+path: `PATCH /anomalies` (bulk close by element IDs, or patch by uuid) lets a
+downstream review UI triage/close anomalies directly against Orbit.
+
+### 4.5 Run Statistics + Facets = instant Gold
+BD pre-computes session statistics (`/run_statistics/sessions`,
+`/sessions_summary`) and per-mission run counts (`/runs/facets/missions`).
+Seed `03-gold/` from these on day one so dashboards work immediately; treat
+the lake's own silver-derived aggregations as eventually authoritative.
+Disagreement between the two is a built-in data-quality check.
+
+### 4.6 Run logs replace live robot_state streaming
+Robot-direct streaming (15 Hz `robot_state`, time sync) is gone; each run's
+log arrives post-hoc. Silver `telemetry/` is therefore **per-run**, not
+continuous. If live telemetry is needed later, re-add a robot-direct SDK
+side-car as an adjacent `ingest-spot-sdk/` tree (keep raw BDDF + protobuf
+bytes there, pin `protos/bosdyn/api/` per SDK version in `_meta/schemas/`).
+The lake layout above doesn't change.
+
+### 4.7 Pin the OpenAPI spec
+The OAS3 document is versioned (`5.0.0` at time of writing) and bronze schemas
+derive from it. Keep pinned copies in `_meta/schemas/` and stamp
+`orbit_version` / `api_version` columns on every table so a multi-instance or
+post_
