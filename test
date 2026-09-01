@@ -1,42 +1,62 @@
-Install-Module -Name Az -AllowClobber -Scope CurrentUser
-Connect-AzAccount
+data-lake/
+│
+├── 00-landing/                          # Raw, exactly as received from Orbit
+│   ├── run_archives/                    # Zips from /run_archives/{runId}
+│   │   └── dt=2026-09-01/run=<uuid>.zip
+│   ├── images/                          # Image bytes for run captures
+│   │   └── capture=<uuid>.<fmt> + capture=<uuid>.json (sidecar metadata)
+│   ├── run_logs/                        # /runs/{uuid}/log raw payloads
+│   │   └── run=<uuid>_log.json
+│   └── api_snapshots/                   # Periodic full-resource GET dumps
+│       └── <resource>/dt=.../snapshot.json    # robots, site_walks, calendar, anomalies
+│
+├── 01-bronze/                           # 1:1 with the Orbit OAS3 schemas — JSON → Parquet
+│   ├── runs/                            # dt=<date>/part-*.parquet
+│   ├── run_events/
+│   ├── run_captures/                    # metadata row per capture (bytes stay as files)
+│   ├── anomalies/
+│   ├── webhooks_events/                 # raw webhook callback payload log
+│   ├── _ref_robots/                     # slowly-changing: snapshot + SCD-2 versioning
+│   ├── _ref_site_walks/
+│   ├── _ref_site_elements/
+│   ├── _ref_site_docks/
+│   └── _quarantine/                     # failed validation, never silently dropped
+│
+├── 02-silver/                           # Cleaned, conformed, joined
+│   ├── sessions/                        # one row per run: robot, mission, started_at,
+│   │                                    #   duration, event_count, capture_count, status
+│   ├── run_events_flat/                 # actions exploded, typed, parent run joined
+│   ├── captures_index/                  # every capture: type, run event, waypoint,
+│   │                                    #   media uri, pose, UTC capture time
+│   ├── telemetry/                       # parsed from run logs (battery, faults, odom)
+│   └── events/                          # unified timeline: anomalies, faults, failures
+│
+├── 03-gold/                             # Analytics / feature layer
+│   ├── mission_success_rate/            # per mission, per robot, per day
+│   ├── inspection_results/              # captures joined to anomalies — "the findings"
+│   ├── fleet_utilization_daily/
+│   ├── robot_health_metrics/            # fault rates, battery cycles, downtime
+│   ├── anomaly_pipeline/                # open → triage → close cycle times (Anomalies API)
+│   └── session_statistics/              # seeded from /run_statistics as fast-start,
+│                                        #   reconciled against own aggregations
+│
+└── _meta/
+    ├── orbit_instances/                 # instance hostname, API version, token scope
+    ├── schemas/                         # pinned OpenAPI spec + Orbit object models
+    └── ingestion/                       # per-resource watermarks: last_uuid,
+                                         #   last_run_started_at
 
-# Define the prefix to search for
-$groupPrefix = "Grok_"
 
-# Fetch groups starting with the prefix
-$groups = Get-AzADGroup -DisplayNameStartsWith $groupPrefix
+---
 
-if (-not $groups) {
-    Write-Host "No groups found starting with '$groupPrefix'" -ForegroundColor Yellow
-    return
-}
+## 3. Design decisions
 
-# Array list to store report items
-$report = [System.Collections.Generic.List[PSCustomObject]]::new()
+### 3.1 The Run is the partition key
+Not robot/time — `run_uuid` is Orbit's organizing unit. Bronze tables partition by
+`dt` (run start date) for query pruning, but every row carries `run_uuid`, plus
+`robot`, `mission_name`, and `site_walk_uuid` as columns. The dominant query
+patterns are "everything from run X" and "all runs of mission Y on robot Z this
+month".
 
-foreach ($group in $groups) {
-    Write-Host "Processing group: $($group.DisplayName)" -ForegroundColor Cyan
-
-    # Fetch members of the group
-    $members = Get-AzADGroupMember -GroupObjectId $group.Id
-
-    foreach ($member in $members) {
-        # Filter strictly for 'User' objects to ignore nested groups or devices
-        if ($member.Type -eq 'User' -or $member.UserPrincipalName) {
-            $report.Add([PSCustomObject]@{
-                GroupName         = $group.DisplayName
-                GroupId           = $group.Id
-                UserDisplayName   = $member.DisplayName
-                UserPrincipalName = $member.UserPrincipalName
-                UserEmail         = $member.Mail
-            })
-        }
-    }
-}
-
-# Output the results in console format
-$report | Format-Table -AutoSize
-
-# Export to CSV (optional)
-# $report | Export-Csv -Path ".\Grok_Group_Users_Az.csv" -NoTypeInformation -Encoding UTF8
+### 3.2 Two ingest modes
+- **Incremental polling** — `GET /runs
