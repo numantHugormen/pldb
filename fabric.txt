@@ -1,0 +1,113 @@
+# Fabric notebook: list tables across multiple workspaces and semantic models
+# Paste each "# %%" block into its own notebook cell.
+# Requires a Fabric notebook (Semantic Link / sempy is preinstalled on Fabric runtime 1.2+).
+
+# %% [cell 1] Parameters
+# Map each workspace to the semantic models you want.
+#   - A list of names/IDs  -> only those models
+#   - None                 -> every model in that workspace
+TARGETS = {
+    "Sales Workspace":   ["Sales Model", "Finance Model"],
+    "Supply Chain WS":   None,
+}
+
+# Set True to ignore TARGETS and scan every workspace you can access
+# (only workspaces on Fabric/Premium capacity are scanned).
+SCAN_ALL_WORKSPACES = False
+
+EXTENDED = False            # True = add row counts / sizes / storage mode (slower, uses XMLA)
+INCLUDE_HIDDEN_INFO = True  # True = add IsHidden / Description from DAX INFO.TABLES()
+SAVE_TO_LAKEHOUSE = False   # True = write results to a Delta table in the attached lakehouse
+OUTPUT_TABLE = "semantic_model_tables"
+
+# %% [cell 2] Imports
+# %pip install -U semantic-link   # uncomment only if sempy is missing/outdated
+import sempy.fabric as fabric
+import pandas as pd
+from datetime import datetime, timezone
+
+# %% [cell 3] Helpers
+AUTO_DATE_PREFIXES = ("LocalDateTable_", "DateTableTemplate_")
+
+def resolve_targets():
+    """Return {workspace: [models] or None}."""
+    if not SCAN_ALL_WORKSPACES:
+        return TARGETS
+    ws = fabric.list_workspaces()
+    if "Is On Dedicated Capacity" in ws.columns:
+        ws = ws[ws["Is On Dedicated Capacity"] == True]
+    return {name: None for name in ws["Name"]}
+
+def get_models(workspace, models):
+    if models:
+        return list(models)
+    return fabric.list_datasets(workspace=workspace)["Dataset Name"].tolist()
+
+def get_tables(workspace, model):
+    t = fabric.list_tables(dataset=model, workspace=workspace, extended=EXTENDED)
+    t = t[~t["Name"].str.startswith(AUTO_DATE_PREFIXES)]
+
+    if INCLUDE_HIDDEN_INFO:
+        try:
+            info = fabric.evaluate_dax(
+                dataset=model,
+                workspace=workspace,
+                dax_string="""
+                EVALUATE SELECTCOLUMNS(INFO.TABLES(),
+                    "Name", [Name], "IsHidden", [IsHidden], "TableDescription", [Description])
+                """,
+            )
+            info.columns = [c.strip("[]") for c in info.columns]
+            t = t.merge(info, on="Name", how="left")
+        except Exception as e:
+            print(f"    INFO.TABLES() not available for '{model}': {e}")
+
+    t.insert(0, "Workspace", workspace)
+    t.insert(1, "Semantic Model", model)
+    return t
+
+# %% [cell 4] Run
+results, errors = [], []
+
+for workspace, models in resolve_targets().items():
+    print(f"Workspace: {workspace}")
+    try:
+        model_list = get_models(workspace, models)
+    except Exception as e:
+        errors.append({"Workspace": workspace, "Semantic Model": None, "Error": str(e)})
+        print(f"  Could not list models: {e}")
+        continue
+
+    for model in model_list:
+        try:
+            t = get_tables(workspace, model)
+            results.append(t)
+            print(f"  {model}: {len(t)} tables")
+        except Exception as e:  # no permission, model not loaded, etc.
+            errors.append({"Workspace": workspace, "Semantic Model": model, "Error": str(e)})
+            print(f"  {model}: FAILED - {e}")
+
+all_tables_df = pd.concat(results, ignore_index=True) if results else pd.DataFrame()
+errors_df = pd.DataFrame(errors)
+
+display(all_tables_df)
+if not errors_df.empty:
+    display(errors_df)
+
+# %% [cell 5] Summary: table count per model
+if not all_tables_df.empty:
+    summary = (all_tables_df.groupby(["Workspace", "Semantic Model"])
+               .size().reset_index(name="Table Count")
+               .sort_values(["Workspace", "Semantic Model"]))
+    display(summary)
+
+# %% [cell 6] Optional: save to the attached lakehouse as a Delta table
+if SAVE_TO_LAKEHOUSE and not all_tables_df.empty:
+    out = all_tables_df.copy()
+    out["ExtractedAtUtc"] = datetime.now(timezone.utc).isoformat()
+    out.columns = [c.replace(" ", "_") for c in out.columns]  # Spark-safe names
+    (spark.createDataFrame(out.astype(str))
+          .write.mode("overwrite").format("delta")
+          .option("overwriteSchema", "true")
+          .saveAsTable(OUTPUT_TABLE))
+    print(f"Saved {len(out)} rows to {OUTPUT_TABLE}")
